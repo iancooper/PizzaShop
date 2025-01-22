@@ -23,9 +23,10 @@ public class KitchenService(
         while (!stoppingToken.IsCancellationRequested)
         {
             var request = await cookRequests.Reader.ReadAsync(stoppingToken);
-            
-            //cook the pizza
-            await Task.Delay(5000, stoppingToken); //simulate cooking time
+
+            List<Task> pizzasCooking = [.. request.Pizzas.Select(CookPizza)];
+
+            await Task.WhenAll(pizzasCooking);
             
             //await the courier to accept the order -- assume the first available courier will accept
             var courierStatusUpdate = await courierStatusUpdates.Reader.ReadAsync(stoppingToken);
@@ -37,5 +38,20 @@ public class KitchenService(
             //NOTE: we don't handle the case where the courier rejects the order, this is deliberate for the purpose of this demo
             //in principle we would need to handle this case and reassign the order to another courier
         }
+    }
+
+    private static async Task CookPizza(Pizza pizza)
+    {
+        var cookingTime = new Random().Next(1000, 5000);
+        cookingTime += pizza.Size switch
+        {
+            PizzaSize.Small => 1000,
+            PizzaSize.Medium => 1000,
+            PizzaSize.Large => 2000,
+            PizzaSize.ExtraLarge => 4000,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+
+        await Task.Delay(cookingTime);
     }
 }
