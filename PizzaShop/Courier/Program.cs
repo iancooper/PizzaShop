@@ -8,10 +8,16 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Shared;
 
 var deliveryJobs = Channel.CreateBounded<OrderStatus>(10);
 
 var hostBuilder = new HostApplicationBuilder();
+hostBuilder.Services.AddPizzaShopTelemetry("Courier", 
+   additionalResourceAttributes: new Dictionary<string, string> { 
+    { "pizza.courier", hostBuilder.Configuration.GetValue<string>("Courier:Name") ?? "unknown-courier" } 
+    });
+
 hostBuilder.Services.AddHostedService<AsbMessagePumpService<DeliveryManifest>>(serviceProvider => AddHostedAvailabilityRequestService(hostBuilder.Configuration, serviceProvider));
 hostBuilder.Services.AddHostedService<AsbMessagePumpService<OrderReady>>(serviceProvider => AddHostedOrderReadyService(hostBuilder.Configuration, serviceProvider));
 hostBuilder.Services.AddHostedService<DeliveryService>(serviceProvider => AddHostedDispatcherService(hostBuilder.Configuration, serviceProvider));

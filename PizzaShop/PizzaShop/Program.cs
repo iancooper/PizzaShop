@@ -2,11 +2,13 @@
 using System.Threading.Channels;
 using AsbGateway;
 using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PizzaShop;
+using Shared;
 
 //our pizza shop has internal channels for its orchestration
 // -- cookrequests are sent to the kitchen
@@ -34,10 +36,15 @@ var hostBuilder = new HostBuilder()
     })
     .ConfigureServices((hostContext, services) =>
     {
+        services.AddPizzaShopTelemetry("PizzaShop");
         //we use multiple pumps, because we don't want all channels to become unresponsive because one gets busy!!! In practice, we would
         //want competing consumers here
+        services.AddAzureClients(clientBuilder => {
+            clientBuilder.AddServiceBusClient(hostContext.Configuration["ServiceBus:ConnectionString"]);
+        });
+
         services.AddHostedService<AsbMessagePumpService<Order>>(serviceProvider => AddHostedOrderService(hostContext, serviceProvider));
-        
+
         //we have distinct queues for job accepted and job rejected to listen to each courier - all post to the same channel
         foreach (var courier in couriers)
         {
@@ -47,23 +54,22 @@ var hostBuilder = new HostBuilder()
         }
         
         //We use channels for our internal pipeline. Channels let us easily wait on work without synchronization primitives
-        services.AddHostedService<KitchenService>(_ => AddHostedKitchenService(hostContext));
-        services.AddHostedService<DispatchService>(_ => AddHostedDispatcherService(hostContext));
+        services.AddHostedService<KitchenService>(serviceProvider => AddHostedKitchenService(hostContext,serviceProvider));
+        services.AddHostedService<DispatchService>(serviceProvider => AddHostedDispatcherService(hostContext, serviceProvider));
     });
 
 await hostBuilder.Build().RunAsync();
 
 AsbMessagePumpService<Order> AddHostedOrderService(HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider)
 {
-    var connectionString = hostBuilderContext.Configuration["ServiceBus:ConnectionString"];
     var queueName = hostBuilderContext.Configuration["ServiceBus:OrderQueueName"];
             
-    if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(queueName))
+    if (string.IsNullOrEmpty(queueName))
     {
         throw new InvalidOperationException("ServiceBus:ConnectionString and ServiceBus:OrderQueueName must be set in configuration");
     }
             
-    var client = new ServiceBusClient(connectionString);
+    var client = serviceProvider.GetRequiredService<ServiceBusClient>();
     var logger = serviceProvider.GetRequiredService<ILogger<AsbMessagePump<Order>>>();
     return new AsbMessagePumpService<Order>(
         client, 
@@ -73,17 +79,15 @@ AsbMessagePumpService<Order> AddHostedOrderService(HostBuilderContext hostBuilde
         async (order, token) => await new PlaceOrderHandler(cookRequests, deliveryRequests, couriers).HandleAsync(order, token));
 }
 
-AsbMessagePumpService<JobAccepted> AddHostedJobAcceptedService(string queueName, HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider1)
-{
-    var connectionString = hostBuilderContext.Configuration["ServiceBus:ConnectionString"];
-            
-    if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(queueName))
+AsbMessagePumpService<JobAccepted> AddHostedJobAcceptedService(string queueName, HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider)
+{            
+    if (string.IsNullOrEmpty(queueName))
     {
         throw new InvalidOperationException("ServiceBus:ConnectionString and ServiceBus:JobAcceptedQueueName must be set in configuration");
     }
             
-    var client = new ServiceBusClient(connectionString);
-    var logger = serviceProvider1.GetRequiredService<ILogger<AsbMessagePump<JobAccepted>>>();
+    var client = serviceProvider.GetRequiredService<ServiceBusClient>();
+    var logger = serviceProvider.GetRequiredService<ILogger<AsbMessagePump<JobAccepted>>>();
     return new AsbMessagePumpService<JobAccepted>(
         client, 
         queueName, 
@@ -92,17 +96,15 @@ AsbMessagePumpService<JobAccepted> AddHostedJobAcceptedService(string queueName,
         async (jobAccepted, token) => await new JobAcceptedHandler(courierStatusUpdates).HandleAsync(jobAccepted, token));
 }
 
-AsbMessagePumpService<JobRejected> AddHostedJobRejectedService(string queueName, HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider2)
-{
-    var connectionString = hostBuilderContext.Configuration["ServiceBus:ConnectionString"];
-            
-    if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(queueName))
+AsbMessagePumpService<JobRejected> AddHostedJobRejectedService(string queueName, HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider)
+{            
+    if (string.IsNullOrEmpty(queueName))
     {
         throw new InvalidOperationException("ServiceBus:ConnectionString and ServiceBus:JobRejectedQueueName must be set in configuration");
     }
             
-    var client = new ServiceBusClient(connectionString);
-    var logger = serviceProvider2.GetRequiredService<ILogger<AsbMessagePump<JobRejected>>>();
+    var client = serviceProvider.GetRequiredService<ServiceBusClient>();
+    var logger = serviceProvider.GetRequiredService<ILogger<AsbMessagePump<JobRejected>>>();
     return new AsbMessagePumpService<JobRejected>(
         client, 
         queueName, 
@@ -111,37 +113,26 @@ AsbMessagePumpService<JobRejected> AddHostedJobRejectedService(string queueName,
         async (jobRejected, token) => await new JobRejectedHandler(courierStatusUpdates).HandleAsync(jobRejected, token));
 }
 
-KitchenService AddHostedKitchenService(HostBuilderContext hostBuilderContext)
+KitchenService AddHostedKitchenService(HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider)
 {
-    var connectionString = hostBuilderContext.Configuration["ServiceBus:ConnectionString"];
-            
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("ServiceBus:ConnectionString must be set in configuration");
-    }
+    var client = serviceProvider.GetRequiredService<ServiceBusClient>();
             
     var orderProducer = new AsbProducer<OrderReady>(
-        new ServiceBusClient(connectionString),
+        client,
         message => new ServiceBusMessage(JsonSerializer.Serialize(message.Content)));
     
     var rejectedProducer = new AsbProducer<OrderRejected>(
-        new ServiceBusClient(connectionString),
+        client,
         message => new ServiceBusMessage(JsonSerializer.Serialize(message.Content)));
             
     return new KitchenService(cookRequests, courierStatusUpdates, orderProducer, rejectedProducer);
 }
 
-DispatchService AddHostedDispatcherService(HostBuilderContext hostBuilderContext)
+DispatchService AddHostedDispatcherService(HostBuilderContext hostBuilderContext, IServiceProvider serviceProvider)
 {
-    var connectionString = hostBuilderContext.Configuration["ServiceBus:ConnectionString"];
-
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("ServiceBus: ConnectionString must be set in configuration");
-    }
-
+    var client = serviceProvider.GetRequiredService<ServiceBusClient>();
     var deliveryManifestProducer = new AsbProducer<DeliveryManifest>(
-        new ServiceBusClient(connectionString),
+        client,
         message => new ServiceBusMessage(JsonSerializer.Serialize(message.Content)));
 
     return new DispatchService(deliveryRequests, deliveryManifestProducer);

@@ -1,7 +1,13 @@
+using System.Diagnostics;
 using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 
 namespace AsbGateway;
+
+public static class DiagnosticSettings
+{
+    public static ActivitySource Source = new ActivitySource("AsbGateway");
+}
 
 /// <summary>
 /// Creates a message pump that will read, translate and dispatch a message from an ASB queue
@@ -29,6 +35,7 @@ public class AsbMessagePump<T>(
         
         processor.ProcessMessageAsync += async args =>
         {
+            using var activity = DiagnosticSettings.Source.StartActivity("ProcessMessage", ActivityKind.Consumer);
             var request = mapToRequest(args.Message);
             var result = await handler(request, cancellationToken);
             if (result)
@@ -42,6 +49,8 @@ public class AsbMessagePump<T>(
         };
         processor.ProcessErrorAsync += args =>
         {
+            Activity.Current?.AddException(args.Exception);
+            Activity.Current?.SetStatus(ActivityStatusCode.Error);
             logger.LogError(args.Exception, "Error processing message");
             return Task.CompletedTask;
         };

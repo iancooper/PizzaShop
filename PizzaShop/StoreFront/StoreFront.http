@@ -6,7 +6,7 @@ Accept: application/json
 ###
 
 ### Send POST request with JSON body
-POST{{StoreFront_HostAddress}}/orders
+POST {{StoreFront_HostAddress}}/orders
 Content-Type: application/json
 
 {

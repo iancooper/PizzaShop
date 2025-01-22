@@ -12,9 +12,17 @@ public class AsbMessagePumpService<T>(
     Func<T,CancellationToken,Task<bool>> handler)
     : BackgroundService 
 {
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var messagePump = new AsbMessagePump<T>(client, queueName, mapToRequest, handler, logger);
-        return messagePump.Run(stoppingToken); 
+        logger.LogInformation("Starting message pump for {queueName}", queueName);
+        try {
+            var messagePump = new AsbMessagePump<T>(client, queueName, mapToRequest, handler, logger);
+            await messagePump.Run(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error starting message pump");
+            await Task.Delay(1000, stoppingToken);
+        }
     }
 }

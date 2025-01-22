@@ -5,6 +5,7 @@ using Azure.Messaging.ServiceBus;
 using Confluent.Kafka;
 using KafkaGateway;
 using Microsoft.EntityFrameworkCore;
+using Shared;
 using StoreFront;
 using StoreFront.Seed;
 
@@ -12,6 +13,9 @@ using StoreFront.Seed;
 string[] couriers = ["alice", "bob", "charlie"];
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddPizzaShopTelemetry("StoreFront");
+
 builder.Services.AddDbContext<PizzaShopDb>(opt => opt.UseInMemoryDatabase("TodoList"));
 builder.AddKafkaConsumer<int, string>("courier-order-status", settings =>
 {
